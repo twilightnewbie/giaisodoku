@@ -1,0 +1,193 @@
+
+using System;
+using System.Collections.Generic;
+
+namespace SudokuSolverApp
+{
+    class SudokuSolver
+    {
+        // Lưu bàn cờ
+        private readonly int[,] g = new int[9, 9];
+
+        // Bitmask đánh dấu các số đã dùng ở hàng/cột/khối 3x3
+        // bit k (1..9) = 1 nếu số k đã dùng
+        private readonly int[] rowMask = new int[9];
+        private readonly int[] colMask = new int[9];
+        private readonly int[] boxMask = new int[9];
+
+        // Danh sách các ô trống (r, c)
+        private readonly List<(int r, int c)> empties = new List<(int r, int c)>();
+
+        public SudokuSolver(int[,] initial)
+        {
+            Array.Copy(initial, g, initial.Length);
+            // Khởi tạo mask + kiểm tra hợp lệ ban đầu
+            for (int r = 0; r < 9; r++)
+            {
+                for (int c = 0; c < 9; c++)
+                {
+                    int v = g[r, c];
+                    if (v == 0) continue;
+                    int b = BoxIndex(r, c);
+                    int bit = 1 << v;
+                    if (((rowMask[r] | colMask[c] | boxMask[b]) & bit) != 0)
+                        throw new ArgumentException("Bàn cờ đầu vào không hợp lệ (trùng số).");
+                    rowMask[r] |= bit;
+                    colMask[c] |= bit;
+                    boxMask[b] |= bit;
+                }
+            }
+            // Gom các ô trống
+            for (int r = 0; r < 9; r++)
+                for (int c = 0; c < 9; c++)
+                    if (g[r, c] == 0) empties.Add((r, c));
+        }
+
+        private static int BoxIndex(int r, int c) => (r / 3) * 3 + (c / 3);
+
+        // Ứng viên hợp lệ cho ô (r,c) -> bitmask các số 1..9 có thể đặt
+        private int CandidatesMask(int r, int c)
+        {
+            int used = rowMask[r] | colMask[c] | boxMask[BoxIndex(r, c)];
+            // bits 1..9 hợp lệ: (~used) & 0b11_1111_1110 (0x3FE)
+            return (~used) & 0x3FE;
+        }
+
+        // Chọn ô trống có ít ứng viên nhất (MRV)
+        private int PickCellWithMRV()
+        {
+            int bestIdx = -1;
+            int bestCount = int.MaxValue;
+            for (int i = 0; i < empties.Count; i++)
+            {
+                var (r, c) = empties[i];
+                if (g[r, c] != 0) continue; // đã lấp từ trước
+                int cand = CandidatesMask(r, c);
+                int count = PopCount(cand);
+                if (count < bestCount)
+                {
+                    bestCount = count;
+                    bestIdx = i;
+                    if (count == 1) break; // tối ưu: không cần tìm tiếp
+                }
+            }
+            return bestIdx;
+        }
+
+        // Đếm số bit 1 trong x (0..1023)
+        private static int PopCount(int x)
+        {
+            int cnt = 0;
+            while (x != 0) { x &= x - 1; cnt++; }
+            return cnt;
+        }
+
+        // Duyệt các số từ bitmask ứng viên (trả về từng số 1..9)
+        private static IEnumerable<int> NumbersFromMask(int mask)
+        {
+            for (int d = 1; d <= 9; d++)
+                if ((mask & (1 << d)) != 0) yield return d;
+        }
+
+        public bool Solve()
+        {
+            // Nếu không còn ô trống => xong
+            int idx = PickCellWithMRV();
+            if (idx == -1) return true;
+
+            var (r, c) = empties[idx];
+            int cand = CandidatesMask(r, c);
+            if (cand == 0) return false; // bế tắc
+
+            foreach (int v in NumbersFromMask(cand))
+            {
+                int b = BoxIndex(r, c);
+                int bit = 1 << v;
+
+                // Đặt v
+                g[r, c] = v;
+                rowMask[r] |= bit;
+                colMask[c] |= bit;
+                boxMask[b] |= bit;
+
+                if (Solve()) return true;
+
+                // Backtrack
+                g[r, c] = 0;
+                rowMask[r] &= ~bit;
+                colMask[c] &= ~bit;
+                boxMask[b] &= ~bit;
+            }
+            return false;
+        }
+
+        public int[,] GetGrid()
+        {
+            var outGrid = new int[9, 9];
+            Array.Copy(g, outGrid, g.Length);
+            return outGrid;
+        }
+
+        public static void Print(int[,] grid)
+        {
+            for (int r = 0; r < 9; r++)
+            {
+                if (r % 3 == 0 && r != 0) Console.WriteLine("------+-------+------");
+                for (int c = 0; c < 9; c++)
+                {
+                    if (c % 3 == 0 && c != 0) Console.Write("| ");
+                    Console.Write(grid[r, c] + " ");
+                }
+                Console.WriteLine();
+            }
+        }
+
+        // Tiện ích: parse từ chuỗi 81 ký tự (0 hoặc . là trống)
+        public static int[,] ParseFromString(string s)
+        {
+            s = s.Replace(".", "0").Replace("\n", "").Replace("\r", "").Replace(" ", "");
+            if (s.Length != 81) throw new ArgumentException("Chuỗi phải có đúng 81 ký tự.");
+            var grid = new int[9, 9];
+            for (int i = 0; i < 81; i++)
+            {
+                char ch = s[i];
+                if (ch < '0' || ch > '9') throw new ArgumentException("Chỉ cho phép ký tự 0-9 hoặc .");
+                grid[i / 9, i % 9] = ch - '0';
+            }
+            return grid;
+        }
+    }
+
+    class Program
+    {
+        static void Main()
+        {
+            // Ví dụ: 0 là ô trống
+            string puzzle =
+                "530070000" +
+                "600195000" +
+                "098000060" +
+                "800060003" +
+                "400803001" +
+                "700020006" +
+                "060000280" +
+                "000419005" +
+                "000080079";
+
+            int[,] grid = SudokuSolver.ParseFromString(puzzle);
+            Console.WriteLine("Ban dau:");
+            SudokuSolver.Print(grid);
+
+            var solver = new SudokuSolver(grid);
+            if (solver.Solve())
+            {
+                Console.WriteLine("\nLoi giai:");
+                SudokuSolver.Print(solver.GetGrid());
+            }
+            else
+            {
+                Console.WriteLine("Khong co loi giai hop le.");
+            }
+        }
+    }
+}
